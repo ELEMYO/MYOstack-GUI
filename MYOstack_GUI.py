@@ -48,7 +48,7 @@ class GUI(QtWidgets.QMainWindow):
     # Custom constructor
     def initUI(self): 
         # Values
-        COM = '' # Example: COM='COM6'
+        COM = 'COM9' # Example: COM='COM6'
         baudRate = 1000000 # Serial frequency
         self.delay = 0.06 # Delay for graphic update
         
@@ -361,7 +361,7 @@ class GUI(QtWidgets.QMainWindow):
         for i in range(9):
             Data[i] = np.concatenate((self.Data[i][self.l: self.dataWidth], self.Data[i][0: self.l]))
          
-        Time = self.Time[self.l + 1: self.dataWidth-1] + self.Time[0: self.l]
+        Time = self.Time[self.l: self.dataWidth] + self.Time[0: self.l]
         
         self.monitor.delay = self.delay
         if self.bandstop50.isChecked() == 1:
@@ -371,6 +371,8 @@ class GUI(QtWidgets.QMainWindow):
                 for i in range(9): Data[i] = self.butter_bandstop_filter(Data[i], 98, 102, self.fs)
             if self.fs > 310: 
                 for i in range(9): Data[i] = self.butter_bandstop_filter(Data[i], 148, 152, self.fs)
+            if self.fs > 410: 
+                for i in range(9): Data[i] = self.butter_bandstop_filter(Data[i], 195, 205, self.fs)
             self.monitor.delay = self.delay + 0.03
         if self.bandstop60.isChecked() == 1:
             if self.fs > 130:
@@ -414,46 +416,32 @@ class GUI(QtWidgets.QMainWindow):
         for i in range(9):
             self.pw[i].setXRange(self.timeWidth*timeCount, self.timeWidth*(timeCount + 1))            
         
-        # Update plot
-        
         # Plot raw and envelope data
         if  self.signal.isChecked() == 1 and self.envelope.isChecked() == 1:
             for i in range(9):
-                try:
-                    self.p[i].setData(y=Data[i][l: self.dataWidth - 2], x=Time[l: self.dataWidth - 1])
-                except ValueError:
-                    pass
-                try:
-                    self.pe[i].setData(y=self.DataEnvelope[i][l: self.dataWidth - 2], x=Time[l: self.dataWidth - 1])
-                except ValueError:
-                    pass
+                self.p[i].setData(y=Data[i][l: self.dataWidth], x=Time[l: self.dataWidth])
+                self.pe[i].setData(y=self.DataEnvelope[i][l: self.dataWidth], x=Time[l: self.dataWidth])
             self.monitor.delay += 0.02
         
         # Plot envelope data            
         if self.signal.isChecked() == 0 and self.envelope.isChecked() == 1:
             for i in range(9):
-                try:
-                    self.pe[i].setData(y=self.DataEnvelope[i][l: self.dataWidth - 2], x=Time[l: self.dataWidth - 1])
-                except ValueError:
-                    pass
+                self.pe[i].setData(y=self.DataEnvelope[i][l: self.dataWidth], x=Time[l: self.dataWidth])
                 self.p[i].clear()
                 
         # Plot raw data 
         if self.signal.isChecked() == 1 and self.envelope.isChecked() == 0:
             for i in range(9):
-                try:
-                    self.p[i].setData(y=Data[i][l: self.dataWidth - 2], x=Time[l: self.dataWidth - 1])
-                except ValueError:
-                    pass
+                self.p[i].setData(y=Data[i][l: self.dataWidth], x=Time[l: self.dataWidth])
                 self.pe[i].clear()
                         
         # Plot histogram
         for i in range(9):
-            self.pb[i].setOpts(height=2*self.DataEnvelope[i][-2])
+            self.pb[i].setOpts(height=2*self.DataEnvelope[i][-1])
         
         # Plot FFT data
-        Y = abs(fft(Data[self.button_group.checkedId() - 1][-500: -2]))/498
-        X = 1/self.dt*np.linspace(0, 1, 498)
+        Y = abs(fft(Data[self.button_group.checkedId() - 1][-501: -1]))/500
+        X = 1/self.dt*np.linspace(0, 1, 500)
         self.FFT = (1-0.85)*Y + 0.85*self.FFT
         self.pFFT.setData(y=self.FFT[2: int(len(self.FFT)/2)], x=X[2: int(len(X)/2)]) 
                     
