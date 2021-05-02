@@ -48,7 +48,7 @@ class GUI(QtWidgets.QMainWindow):
     # Custom constructor
     def initUI(self): 
         # Values
-        COM = 'COM9' # Example: COM='COM6'
+        COM = '' # Example: COM='COM9'
         baudRate = 1000000 # Serial frequency
         self.delay = 0.06 # Delay for graphic update
         
