@@ -87,13 +87,13 @@ class GUI(QtWidgets.QMainWindow):
         self.selectedGain = 1 # Sensor gain selected from GUI
 
         # Menu panel
-        stopAction = QtGui.QAction(QtGui.QIcon('img/pause.png'), 'Stop/Start (Space)', self)
+        stopAction = QtWidgets.QAction(QtGui.QIcon('img/pause.png'), 'Stop/Start (Space)', self)
         stopAction.setShortcut('Space')
         stopAction.triggered.connect(self.stop)
-        refreshAction = QtGui.QAction(QtGui.QIcon('img/refresh.png'), 'Refresh (R)', self)
+        refreshAction = QtWidgets.QAction(QtGui.QIcon('img/refresh.png'), 'Refresh (R)', self)
         refreshAction.setShortcut('r')
         refreshAction.triggered.connect(self.refresh)
-        exitAction = QtGui.QAction(QtGui.QIcon('img/out.png'), 'Exit (Esc)', self)
+        exitAction = QtWidgets.QAction(QtGui.QIcon('img/out.png'), 'Exit (Esc)', self)
         exitAction.setShortcut('Esc')
         exitAction.triggered.connect(self.close)
         
