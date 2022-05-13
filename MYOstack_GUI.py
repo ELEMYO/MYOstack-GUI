@@ -1,7 +1,8 @@
 # Graphical interface for signal visualization and interaction with ELEMYO MYOstack sensors
-# 2021-04-23 by ELEMYO (https://github.com/ELEMYO/ELEMYO GUI)
+# 2022-05-13 by ELEMYO (https://github.com/ELEMYO/ELEMYO GUI)
 # 
 # Changelog:
+#     2022-05-13 - improved user interface
 #     2021-04-30 - envelope plot added
 #     2021-04-23 - initial release
 
@@ -27,17 +28,30 @@
 # THE SOFTWARE.
 # ===============================================
 
+import sys
+import os
+import pkg_resources
+
+required = {'pyserial', 'pyqtgraph', 'pyqt5', 'numpy', 'scipy'} 
+installed = {pkg.key for pkg in pkg_resources.working_set}
+missing = required - installed
+
+if missing:
+    for module in missing:
+        if module == "pyqt5": module += "==5.15.5"
+        os.system("python -m pip install " + module)
+
 from PyQt5 import QtCore, QtWidgets, QtGui
 from PyQt5.QtCore import Qt
-import sys
 import serial
 import pyqtgraph as pg
 import numpy as np
 import time
 from scipy.signal import butter, lfilter
 import serial.tools.list_ports
-from datetime import datetime
 from scipy.fftpack import fft
+from serial import SerialException
+from datetime import datetime
 
 # Main window
 class GUI(QtWidgets.QMainWindow):
@@ -45,63 +59,154 @@ class GUI(QtWidgets.QMainWindow):
     def __init__(self):
           super(GUI, self).__init__()
           self.initUI()
-    # Custom constructor
+    # Custom constructor 
     def initUI(self): 
         # Values
-        COM = '' # Example: COM='COM9'
-        baudRate = 1000000 # Serial frequency
-        self.delay = 0.06 # Delay for graphic update
-        
-        self.gain = [1, 1, 1, 1, 1, 1, 1, 1, 1] # Sensors gain, index is the sensor number
-        
-        self.setWindowTitle("MYOstack GUI v1.0.1 | ELEMYO" + "    ( COM Port not found )")
+        self.delay = 0.21 # Graphics update delay
+        self.setWindowTitle("ELEMYO MYOstack GUI v1.1.0")
         self.setWindowIcon(QtGui.QIcon('img/icon.png'))
-        self.f = open(datetime.now().strftime("%Y_%m_%d_%H_%M_%S") + ".txt", "w") # Data file creation
-        self.f.write(datetime.now().strftime("Date: %Y.%m.%d\rTime: %H:%M:%S") + "\r\n") # Data file head
-        self.f.write("File format: \r\nseconds | data1 | data2 | data3 | data4 | data5 | data6 | data7| data8 | data9 \r\n") # Data file format
-        self.l = 0 # Current data point
-        self.dt = 0.002 # Time between two signal measurements in s
-        self.fs = 1/self.dt # Signal discretization frequency in Hz
-        self.passLowFrec = 10 # Low frequency for passband filter
-        self.passHighFrec = 200 # Low frequency for passband filter
-        self.dataWidth = int(6.2/self.dt) # Maximum count of ploting data points (6.2 secondes vindow)
-        self.Time = [0]*self.dataWidth # Time array
-        self.timeWidth = 5 # Time width of plot
-        self.Data = np.zeros((9, self.dataWidth)) # Raw data matrix, first index - sensor number, second index - sensor data 
-        self.DataEnvelope = np.zeros((9, self.dataWidth)) # Envelope of row data, first index - sensor number, second index - sensor data 
         
-        # Accessory variables for envelope (for moving average method)
-        self.MA = np.zeros((9, 3)) 
-        self.MA_alpha = 0.95
-        self.Y0 = np.zeros(9)
-        self.X0 = np.zeros(9)
+        self.fs = 500 # Sampling frequency in Hz
+        self.dt = 1/self.fs  # Time between two signal measurements in s
+        
+        self.passLowFrec = 10 # Low frequency for band-pass filter
+        self.passHighFrec = 200 # High frequency for band-pass filter
+        
+        self.dataWidth = int(12/self.dt) # Maximum count of plotting data points (12 seconds window)
+        self.Data = np.zeros((9, self.dataWidth)) # Raw data array, first index - sensor number, second index - sensor data
+        self.DataEnvelope = np.zeros((9, self.dataWidth)) # Envelope of row data, first index - sensor number, second index - sensor data
+        self.l = 0 # Current sensor data point
+        self.Time = [0]*self.dataWidth # Time array (in seconds)
+        self.timeWidth = 10 # Plot window length in seconds
+        
+        self.MovingAverage = MovingAverage(self.fs) # Variable for data envelope (for moving average method)
+        
+        self.recordingFileName = '' # Recording file name
+        self.loadFileName = '' # Data load file name
+        self.loadFile = 0 # Data load variable
+        self.sliderpos = 0 # Position of data slider 
+        self.StartTime = 0
+        self.EndTime = 0
+        
+        self.loopNumber = 0
+        
+        self.FFT = np.zeros((9, 500)) # Fast Fourier transform data
         
         # Accessory variables for data read from serial
         self.ms_len = 0;
-        self.msg_end = np.array([0])
+        self.msg_end = bytearray([0])
         
-        self.loopNumber = 0; # Loop number
-        self.FFT = 0 # Fast Fourier transform data
-        
-        self.selectedSensor = 1 # Sensor number selected from GUI
-        self.selectedGain = 1 # Sensor gain selected from GUI
-
         # Menu panel
-        stopAction = QtWidgets.QAction(QtGui.QIcon('img/pause.png'), 'Stop/Start (Space)', self)
-        stopAction.setShortcut('Space')
-        stopAction.triggered.connect(self.stop)
-        refreshAction = QtWidgets.QAction(QtGui.QIcon('img/refresh.png'), 'Refresh (R)', self)
-        refreshAction.setShortcut('r')
-        refreshAction.triggered.connect(self.refresh)
-        exitAction = QtWidgets.QAction(QtGui.QIcon('img/out.png'), 'Exit (Esc)', self)
-        exitAction.setShortcut('Esc')
-        exitAction.triggered.connect(self.close)
+        self.COMports = QtGui.QComboBox()        
+        self.COMports.setDisabled(False)
+        self.COMports.setSizeAdjustPolicy(0)
         
+        self.liveFromSerialAction = QtGui.QAction(QtGui.QIcon('img/play.png'), 'Start\Stop live from serial ', self)
+        self.liveFromSerialAction.setCheckable(True)
+        self.liveFromSerialAction.setChecked(False)
+        self.liveFromSerialAction.triggered.connect(self.liveFromSerial)
+
+        self.dataRecordingAction = QtGui.QAction(QtGui.QIcon('img/rec.png'), 'Start/Stop recording', self)
+        self.dataRecordingAction.triggered.connect(self.dataRecording)
+        self.dataRecordingAction.setCheckable(True)
+        self.dataRecordingAction.setDisabled(True)
+        
+        self.refreshAction = QtGui.QAction(QtGui.QIcon('img/refresh.png'), 'Refresh screen (R)', self)
+        self.refreshAction.setShortcut('r')
+        self.refreshAction.triggered.connect(self.refreshForAction)
+        self.refreshAction.setDisabled(True)   
+        
+        self.pauseAction = QtGui.QAction(QtGui.QIcon('img/pause.png'), 'Pause (Space)', self)
+        self.pauseAction.setCheckable(True)
+        self.pauseAction.setChecked(False)
+        self.pauseAction.triggered.connect(self.pause)
+        self.pauseAction.setShortcut('Space')
+        self.pauseAction.setDisabled(True)   
+               
+        dataLoadAction = QtGui.QAction(QtGui.QIcon('img/load.png'), 'Select playback file', self)
+        dataLoadAction.triggered.connect(self.dataLoad)
+        
+        self.PlaybackAction = QtGui.QAction(QtGui.QIcon('img/playback.png'), 'Start/Stop playback from file: \nFILE NOT SELECTED', self)
+        self.PlaybackAction.triggered.connect(self.Playback)
+        self.PlaybackAction.setCheckable(True)
+        self.PlaybackAction.setDisabled(True)
+        
+        self.slider = QtWidgets.QScrollBar(QtCore.Qt.Horizontal)
+        self.slider.setValue(0)
+        self.slider.setFixedWidth(40)
+        self.slider.setDisabled(True)  
+        
+        self.MYOstackVersion = QtGui.QLabel('MYOstack version:  ', self)
+        self.MYOstackVersionCheck = QtGui.QComboBox() 
+        self.MYOstackVersionCheck.addItem("v1.1")
+        self.MYOstackVersionCheck.addItem("v1.0")
+        self.MYOstackVersion1 = QtGui.QLabel('       ', self)
+        
+        self.rawSignalAction = QtGui.QCheckBox('MAIN SIGNAL', self)
+        self.rawSignalAction.setChecked(True)
+        self.rawSignalAction1 = QtGui.QLabel('       ', self)  
+
+        self.EnvelopeSignalAction = QtGui.QCheckBox('ENVELOPE:', self)
+        self.EnvelopeSignalAction.setChecked(True)
+        self.EnvelopeSignalAction1 = QtGui.QLabel('    ', self)
+        self.envelopeSmoothingСoefficient = QtGui.QDoubleSpinBox()
+        self.envelopeSmoothingСoefficient.setSingleStep(0.01)
+        self.envelopeSmoothingСoefficient.setRange(0, 1)
+        self.envelopeSmoothingСoefficient.setValue(0.95)
+        
+        self.bandstopAction = QtGui.QCheckBox('BANDSTOP FILTER:', self)
+        self.bandstopAction.setCheckable(True)
+        
+        self.notchActiontypeBox=QtGui.QComboBox()
+        self.notchActiontypeBox.addItem("50 Hz")
+        self.notchActiontypeBox.addItem("60 Hz")
+        self.notchActiontypeBox.setDisabled(True)
+                        
+        self.bandpassAction = QtGui.QCheckBox('BANDPASS FILTER:', self)
+        self.bandpassAction.setCheckable(True)
+        self.bandpassAction.setChecked(True)
+        self.bandpassAction1 = QtGui.QLabel('  -  ', self)
+        self.bandpassAction2 = QtGui.QLabel('       ', self)
+        
+        self.passLowFreq = QtGui.QSpinBox()
+        self.passLowFreq.setRange(10, 249)
+        self.passLowFreq.setValue(10)
+        self.passLowFreq.setDisabled(True)
+                      
+        self.passHighFreq = QtGui.QSpinBox()
+        self.passHighFreq.setRange(10, 249)
+        self.passHighFreq.setValue(200)
+        self.passHighFreq.setDisabled(True)     
+
+#--------------------------        
         # Toolbar
-        toolbar = self.addToolBar('Tool')
-        toolbar.addAction(stopAction)
-        toolbar.addAction(refreshAction)
-        toolbar.addAction(exitAction)
+        toolbar = []
+        toolbar.append(self.addToolBar('Tool1'))
+        toolbar.append(self.addToolBar('Tool2'))
+        toolbar.append(self.addToolBar('Tool3'))
+        toolbar[0].addWidget(self.COMports)
+        toolbar[0].addAction(self.liveFromSerialAction)
+        toolbar[0].addAction(self.dataRecordingAction)
+        toolbar[0].addAction(self.refreshAction)
+        toolbar[0].addAction(self.pauseAction)
+        toolbar[1].addAction(dataLoadAction)
+        toolbar[1].addAction(self.PlaybackAction)
+        toolbar[1].addWidget(self.slider)
+        toolbar[2].addWidget(self.MYOstackVersion)
+        toolbar[2].addWidget(self.MYOstackVersionCheck)
+        toolbar[2].addWidget(self.MYOstackVersion1)
+        toolbar[2].addWidget(self.rawSignalAction)
+        toolbar[2].addWidget(self.EnvelopeSignalAction1)
+        toolbar[2].addWidget(self.EnvelopeSignalAction)
+        toolbar[2].addWidget(self.envelopeSmoothingСoefficient)
+        toolbar[2].addWidget(self.rawSignalAction1)
+        toolbar[2].addWidget(self.bandstopAction)
+        toolbar[2].addWidget(self.notchActiontypeBox)
+        toolbar[2].addWidget(self.bandpassAction2)
+        toolbar[2].addWidget(self.bandpassAction)
+        toolbar[2].addWidget(self.passLowFreq)
+        toolbar[2].addWidget(self.bandpassAction1)
+        toolbar[2].addWidget(self.passHighFreq)
         
         # Plot widgets for 1-9 sensor
         self.pw = [] # Plot widget array, index - sensor number
@@ -139,41 +244,9 @@ class GUI(QtWidgets.QMainWindow):
             self.pbar.addItem(self.pb[i])  
         self.pbar.setLabel('bottom', 'Sensor number')
         
-        # Styles
+        # Style
         centralStyle = "color: rgb(255, 255, 255); background-color: rgb(13, 13, 13);"
-        editStyle = "border-style: solid; border-width: 1px;"
-        
-        # Settings zone
-        filtersText = QtWidgets.QLabel("FILTERS:")
-        self.passLowFreq = QtWidgets.QLineEdit(str(self.passLowFrec), self)
-        self.passLowFreq.setMaximumWidth(100)
-        self.passLowFreq.setStyleSheet(editStyle)
-        self.passHighFreq = QtWidgets.QLineEdit(str(self.passHighFrec), self)
-        self.passHighFreq.setMaximumWidth(100)
-        self.passHighFreq.setStyleSheet(editStyle)
-        self.bandpass = QtWidgets.QCheckBox("BANDPASS FILTER:")
-        self.bandstop50 = QtWidgets.QCheckBox("NOTCH 50 Hz")
-        self.bandstop60 = QtWidgets.QCheckBox("NOTCH 60 Hz")
-        
-        plotStyle = QtWidgets.QLabel("PLOT STYLE: ")
-        self.signal = QtWidgets.QCheckBox("Signal")
-        self.envelope = QtWidgets.QCheckBox("Envelope")
-        self.signal.setChecked(True)
-        
-        self.envelopeSmoothing = QtWidgets.QLabel(" Envelope smoothing:")
-        self.envelopeSmoothingСoefficient = QtWidgets.QLineEdit(str(self.MA_alpha), self)
-        self.envelopeSmoothingСoefficient.setMaximumWidth(100)
-        self.envelopeSmoothingСoefficient.setStyleSheet(editStyle)
-        
-        self.sensorNumberText = QtWidgets.QLabel("Sensor number:")
-        self.sensorGainText = QtWidgets.QLabel("Sensor gain:")
-        self.sensorNumber = QtWidgets.QLineEdit(str(self.selectedSensor), self)
-        self.sensorNumber.setMaximumWidth(100)
-        self.sensorNumber.setStyleSheet(editStyle)
-        self.sensorGain = QtWidgets.QLineEdit(str(self.selectedGain), self)
-        self.sensorGain.setMaximumWidth(100)
-        self.sensorGain.setStyleSheet(editStyle)
-        
+               
         # Buttons for selecting sensor for FFT analysis
         fftButton = []
         for i in range(9):
@@ -183,8 +256,6 @@ class GUI(QtWidgets.QMainWindow):
         self.button_group = QtWidgets.QButtonGroup()
         for i in range(9):
             self.button_group.addButton(fftButton[i], i + 1)
-        self.button_group.buttonClicked.connect(self._on_radio_button_clicked)
-        
         
         # Numbering of graphs
         backLabel = []
@@ -205,127 +276,421 @@ class GUI(QtWidgets.QMainWindow):
         numberLabel[7].setStyleSheet("font-size: 25px; background-color: rgb(75, 13, 98); border-radius: 14px;")
         numberLabel[8].setStyleSheet("font-size: 25px; background-color: rgb(139, 0, 55); border-radius: 14px;")
         
+        self.gainLabel  = []
+        self.gainBox  = []
+        for i in range(9):
+            self.gainLabel.append(QtWidgets.QLabel("GAIN: 1000 x"))
+            self.gainBox.append(QtGui.QSpinBox())
+            self.gainBox[i].setRange(1, 10)
+            self.gainBox[i].setValue(1)
+        
         # Main widget
         centralWidget = QtWidgets.QWidget()
         centralWidget.setStyleSheet(centralStyle)
         
+        self.textWindow = QtWidgets.QPlainTextEdit()
+        self.textWindow.setReadOnly(True)
+        
+        self.textWindow.insertPlainText(datetime.now().strftime("[%H:%M:%S] ") + "program launched\n")
+        
         # Layout
         vbox = QtWidgets.QVBoxLayout()
         
-        layout = QtWidgets.QGridLayout()
-        layout.addWidget(backLabel[0], 0, 1)
-        layout.addWidget(numberLabel[0], 0, 1, Qt.AlignVCenter)
-        layout.addWidget(numberLabel[1], 1, 1, Qt.AlignVCenter)
-        layout.addWidget(backLabel[1], 2, 1)
-        layout.addWidget(numberLabel[2], 2, 1, Qt.AlignVCenter)
-        layout.addWidget(numberLabel[3], 3, 1, Qt.AlignVCenter)
-        layout.addWidget(backLabel[2], 4, 1, 4, 1)
-        layout.addWidget(numberLabel[4], 4, 1, 4, 1, Qt.AlignVCenter)
-        layout.addWidget(numberLabel[5], 8, 1, Qt.AlignVCenter)
-        layout.addWidget(backLabel[3], 9, 1)
-        layout.addWidget(numberLabel[6], 9, 1, Qt.AlignVCenter)
-        layout.addWidget(numberLabel[7], 10, 1, Qt.AlignVCenter)
-        layout.addWidget(backLabel[4], 11, 1, 4, 1)
-        layout.addWidget(numberLabel[8], 11, 1, 4, 1, Qt.AlignVCenter)
+        topleft = QtWidgets.QFrame()
+        topleft.setFrameShape(QtWidgets.QFrame.StyledPanel)
         
-        layout.addWidget(self.pw[0], 0, 2, 1, 2)
-        layout.addWidget(self.pw[1], 1, 2, 1, 2)
-        layout.addWidget(self.pw[2], 2, 2, 1, 2)
-        layout.addWidget(self.pw[3], 3, 2, 1, 2)
-        layout.addWidget(self.pw[4], 4, 2, 4, 2)
-        layout.addWidget(self.pw[5], 8, 2, 1, 2)
-        layout.addWidget(self.pw[6], 9, 2, 1, 2)
-        layout.addWidget(self.pw[7], 10, 2, 1, 2)
-        layout.addWidget(self.pw[8], 11, 2, 4, 2)
-        layout.addWidget(self.pbar, 0, 4, 4, 10)
-        layout.addWidget(self.pwFFT, 4, 4, 7, 10)
+        plotLayout = []
+        row = []
+        for i in range(9):
+            plotLayout.append(QtWidgets.QGridLayout())
+            plotLayout[i] = QtWidgets.QGridLayout()
+            if i % 2 == 0: plotLayout[i].addWidget(backLabel[int(i/2)], 0, 0, 10, 1)
+            plotLayout[i].addWidget(numberLabel[i], 0, 0, 10, 1, Qt.AlignVCenter)
+            plotLayout[i].addWidget(self.pw[i], 0, 1, 10, 50) 
+            plotLayout[i].addWidget(self.gainLabel[i], 0, 49) 
+            plotLayout[i].addWidget(self.gainBox[i], 0, 50) 
+            
+            row.append(QtWidgets.QWidget())
+            row[i].setLayout(plotLayout[i])
+            
+        splitter = QtWidgets.QSplitter(Qt.Vertical)
+        splitter.handle(100)
+        for i in range(9): splitter.addWidget(row[i])
+        
+        layout = QtWidgets.QGridLayout()       
+        layout.addWidget(splitter, 0, 0, 40, 4)
+        layout.addWidget(self.pbar, 0, 4, 20, 11)
+        layout.addWidget(self.pwFFT, 20, 4, 16, 11)
         layout.setColumnStretch(2, 2)
         
-
-        layout.addWidget(fftButton[0], 4, 10)
-        layout.addWidget(fftButton[1], 4, 11) 
-        layout.addWidget(fftButton[2], 4, 12) 
-        layout.addWidget(fftButton[3], 5, 10)
-        layout.addWidget(fftButton[4], 5, 11)  
-        layout.addWidget(fftButton[5], 5, 12)
-        layout.addWidget(fftButton[6], 6, 10)
-        layout.addWidget(fftButton[7], 6, 11)  
-        layout.addWidget(fftButton[8], 6, 12)      
-        layout.addWidget(filtersText, 11, 4) 
-        layout.addWidget(self.bandstop50, 11, 5) 
-        layout.addWidget(self.bandstop60, 11, 6)
-        layout.addWidget(self.bandpass, 11, 7) 
-        layout.addWidget(self.passLowFreq, 11, 8) 
-        layout.addWidget(self.passHighFreq, 11, 9)
-        layout.addWidget(plotStyle, 12, 4)
-        layout.addWidget(self.signal, 12, 5) 
-        layout.addWidget(self.envelope, 12, 6)  
-        layout.addWidget(self.envelopeSmoothing, 12, 7)      
-        layout.addWidget(self.envelopeSmoothingСoefficient, 12, 8)
-        layout.addWidget(self.sensorNumberText, 13, 4)
-        layout.addWidget(self.sensorNumber, 13, 5)
-        layout.addWidget(self.sensorGainText, 13, 6)
-        layout.addWidget(self.sensorGain, 13, 7)
+        for i in range(3): layout.addWidget(fftButton[i], 20, 12 + i, 2, 1)
+        for i in range(3): layout.addWidget(fftButton[3+i], 21, 12 + i, 2, 1)
+        for i in range(3): layout.addWidget(fftButton[6+i], 22, 12 + i, 2, 1)
+        layout.addWidget(self.textWindow, 36, 4, 3, 12)   
         
         vbox.addLayout(layout)
         centralWidget.setLayout(vbox)
         self.setCentralWidget(centralWidget)  
         self.showMaximized()
-        self.show()
+        self.show()    
+        
         # Serial monitor
-        self.monitor = SerialMonitor(COM, baudRate, self.delay)
-        self.monitor.bufferUpdated.connect(self.updateListening, QtCore.Qt.QueuedConnection)
+        self.serialMonitor = SerialMonitor(self.delay)
+        ports = [self.COMports.itemText(i) for i in range(self.COMports.count())]
+        
+        for i in range(len(self.serialMonitor.ports)):
+                if self.serialMonitor.ports[i] not in ports:
+                    self.COMports.addItem(self.serialMonitor.ports[i])
+                    
+        if self.serialMonitor.COM != '':
+            self.serialMonitor.serialConnect()
+            self.liveFromSerialAction.setChecked(True)
+            self.dataRecordingAction.setDisabled(False)
+            self.textWindow.insertPlainText(datetime.now().strftime("[%H:%M:%S] ") + "live from " + self.serialMonitor.COM +" \n")
+            self.textWindow.verticalScrollBar().setValue(self.textWindow.verticalScrollBar().maximum()-2)
+            self.COMports.setDisabled(True)
+            self.refreshAction.setDisabled(False)  
+            self.pauseAction.setDisabled(False)  
+        
+        self.mainrun = MainRun(self.delay)
+        self.mainrun.bufferUpdated.connect(self.updateListening, QtCore.Qt.QueuedConnection)  
+        
+    def liveFromSerial(self):
+        if self.liveFromSerialAction.isChecked():
+            self.refresh()
+            self.serialMonitor.serialConnect()
+            self.textWindow.insertPlainText(datetime.now().strftime("[%H:%M:%S] ") + "live from " + self.serialMonitor.COM +" \n")
+            self.textWindow.verticalScrollBar().setValue(self.textWindow.verticalScrollBar().maximum()-2)
+            self.PlaybackAction.setChecked(False)
+            self.refreshAction.setDisabled(False)   
+            self.pauseAction.setDisabled(False)
+            self.dataRecordingAction.setDisabled(False)
+            self.dataRecordingAction.setChecked(False) 
+            self.COMports.setDisabled(True)
+            self.slider.setDisabled(True)
+            self.slider.setFixedWidth(40)
+
+        else:
+            self.refresh()
+            self.serialMonitor.serialDisconnection()
+            self.textWindow.insertPlainText(datetime.now().strftime("[%H:%M:%S] ") + "live stopped\n")
+            self.textWindow.verticalScrollBar().setValue(self.textWindow.verticalScrollBar().maximum()-2)
+            self.refreshAction.setDisabled(True)   
+            self.pauseAction.setDisabled(True)
+            self.dataRecordingAction.setDisabled(True)
+            self.dataRecordingAction.setChecked(False)
+            self.COMports.setDisabled(False)
+           
     # Start working
     def start(self):
-        self.monitor.running = True
-        self.monitor.start()
-    # Pause
-    def stop(self):
-        if self.monitor.running == False:
-            self.monitor.running = True
-            self.monitor.start()
+        self.mainrun.running = True
+        self.mainrun.start()
+    
+    # Pause data plotting
+    def pause(self):
+        if self.pauseAction.isChecked():
+            self.mainrun.running = False
+            self.textWindow.insertPlainText(datetime.now().strftime("[%H:%M:%S] ") + "pause ON" + "\n")
+            self.textWindow.verticalScrollBar().setValue(self.textWindow.verticalScrollBar().maximum()-2)
         else:
-            self.monitor.running = False
-    # Refresh
+            self.mainrun.running = True
+            self.mainrun.start()
+            self.textWindow.insertPlainText(datetime.now().strftime("[%H:%M:%S] ") + "pause OFF" + "\n")
+            self.textWindow.verticalScrollBar().setValue(self.textWindow.verticalScrollBar().maximum()-2)
+
+    # Refresh data
     def refresh(self):
-        self.l = 0 #Current point
-        self.Time = [0]*self.dataWidth #Tine array
+        self.l = 0
+        self.Time = [0]*self.dataWidth
         self.Data = np.zeros((9, self.dataWidth))
         self.DataEnvelope = np.zeros((9, self.dataWidth))
-        self.Time = [0]*self.dataWidth
-        self.msg_end = 0        
-        self.loopNumber = 0;
+        self.msg_end = bytearray([0])     
+        self.ms_len =  0
+        self.slider.setValue(0)
+        self.loopNumber = 0
+
+    # Refresh screen
+    def refreshForAction(self):
+        self.refresh()
+        self.textWindow.insertPlainText(datetime.now().strftime("[%H:%M:%S] ") + "refresh" + "\n")
+        self.textWindow.verticalScrollBar().setValue(self.textWindow.verticalScrollBar().maximum()-2)      
+         
+    # Initialize recording data to a file
+    def dataRecording(self):
+        if (self.dataRecordingAction.isChecked()):
+            self.refreshAction.setDisabled(True)   
+            self.pauseAction.setDisabled(True)
+            
+            self.recordingFileName = datetime.now().strftime("%Y_%m_%d_%H_%M_%S") + ".txt"
+            self.textWindow.insertPlainText(datetime.now().strftime("[%H:%M:%S] ") + "recording to \"" + os.getcwd() +"\\" + self.recordingFileName + "\"\n")
+            self.textWindow.verticalScrollBar().setValue(self.textWindow.verticalScrollBar().maximum()-2)
+            f = open(self.recordingFileName, "w") # Data file creation
+            f.write(datetime.now().strftime("Date: %Y.%m.%d\rTime: %H:%M:%S") + "\r\n") # Data file name
+            f.write("File format: \r\ntime in s | 9 sensor data points \r\n") # Data file format
+            f.close()
+        else:
+            self.refreshAction.setDisabled(False)   
+            self.pauseAction.setDisabled(False)
+            self.textWindow.insertPlainText(datetime.now().strftime("[%H:%M:%S] ") + "recording stopped. Result file: \"" + os.getcwd() + self.recordingFileName + "\"\n")
+            self.textWindow.verticalScrollBar().setValue(self.textWindow.verticalScrollBar().maximum()-2)
+                
+    # Selecting playback file
+    def dataLoad(self):
+        self.dataRecordingAction.setChecked(False)
+        self.refreshAction.setDisabled(False)   
+        self.pauseAction.setDisabled(False)
+        self.recordingFileName = ''
+        path = QtWidgets.QFileDialog.getOpenFileName(self, 'Open a file', '',
+                                        'All Files (*.*)')
+        if path != ('', ''):
+            self.loadFileName = str(path[0])
+            self.textWindow.insertPlainText(datetime.now().strftime("[%H:%M:%S] ") + "playback file selected: " + self.loadFileName + "\n")
+            self.textWindow.verticalScrollBar().setValue(self.textWindow.verticalScrollBar().maximum()-2)
+            self.PlaybackAction.setText("Start/Stop playback from file: \n" + self.loadFileName)
+            self.PlaybackAction.setDisabled(False)
+    
+    # Playback initialization 
+    def Playback(self):
+        if self.PlaybackAction.isChecked():
+            self.dataRecordingAction.setChecked(False)
+            self.slider.setDisabled(False)
+            self.slider.setFixedWidth(300)
+            if self.liveFromSerialAction.isChecked():
+                self.liveFromSerialAction.setChecked(False)
+            self.refresh()
+            self.liveFromSerialAction.setChecked(False)
+            self.serialMonitor.serialDisconnection()
+            self.dataRecordingAction.setDisabled(False)  
+            self.refreshAction.setDisabled(True) 
+            self.pauseAction.setDisabled(False)  
+            self.COMports.setDisabled(False)
+            
+            self.loadFile = open(self.loadFileName, 'r')
+            
+            self.textWindow.insertPlainText(datetime.now().strftime("[%H:%M:%S] ") + "playback from: " + self.loadFileName + "\n")
+            self.textWindow.verticalScrollBar().setValue(self.textWindow.verticalScrollBar().maximum()-2)
+            
+            for i in range (7):
+                self.loadFile.readline()
+            message = self.loadFile.readline()
+            s = message.split(' ')
+            
+            if len(s) == 11:
+                self.StartTime = float(s[0])
+                self.Time[0] = self.StartTime
+                while message != '':
+                    message = self.loadFile.readline()
+                    s = message.split(' ')
+                    if len(s) == 11: 
+                        self.EndTime = float(s[0])
+                    if len(s) != 11 and message != '':
+                        self.textWindow.insertPlainText(datetime.now().strftime("[%H:%M:%S] ") + "file read ERROR." + "\n")
+                        self.textWindow.verticalScrollBar().setValue(self.textWindow.verticalScrollBar().maximum()-2)
+                        self.PlaybackAction.setChecked(False)   
+            else:
+                self.textWindow.insertPlainText(datetime.now().strftime("[%H:%M:%S] ") + "file read ERROR." + "\n")
+                self.textWindow.verticalScrollBar().setValue(self.textWindow.verticalScrollBar().maximum()-2)
+                self.PlaybackAction.setChecked(False)  
+            
+        else:
+            self.slider.setDisabled(True)
+            self.slider.setFixedWidth(40)
+            self.refresh()
+            self.dataRecordingAction.setDisabled(True)
+            self.textWindow.insertPlainText(datetime.now().strftime("[%H:%M:%S] ") + "playback stopped \n")
+            self.textWindow.verticalScrollBar().setValue(self.textWindow.verticalScrollBar().maximum()-2)
+            self.pauseAction.setDisabled(True)  
+
     # Update
-    def updateListening(self, msg):
-        # Update variables
-        self.setWindowTitle("MYOstack GUI v1.0.1 | ELEMYO " + 
-                            "    ( " + self.monitor.COM + " , " + str(self.monitor.baudRate) + " baud )")
-        s = self.passLowFreq.text()
-        if s.isdigit():
-            self.passLowFrec = float(s)
-        s = self.passHighFreq.text()
-        if s.isdigit():
-            self.passHighFrec = float(self.passHighFreq.text())
+    def updateListening(self): 
+        if (not self.liveFromSerialAction.isChecked()):
+            self.serialMonitor.updatePorts()
+                   
+            ports = [self.COMports.itemText(i) for i in range(self.COMports.count())]
+            
+            for i in range(self.COMports.count()):
+                if self.COMports.itemText(i) not in self.serialMonitor.ports:
+                    self.COMports.removeItem(i)
+                    
+            for i in range(len(self.serialMonitor.ports)):
+                if self.serialMonitor.ports[i] not in ports:
+                    self.COMports.addItem(self.serialMonitor.ports[i])
+            
+            if self.serialMonitor.COM != self.COMports.currentText():
+                self.serialMonitor.COM = self.COMports.currentText()
+                self.serialMonitor.connect = False
         
-        s = self.envelopeSmoothingСoefficient.text()
-        try:
-            if (float(s) >= 0) and (float(s) <= 1):
-                self.MA_alpha= float(s)
-        except ValueError:
-            pass
+        if len(self.COMports) == 0: 
+            self.COMports.addItem("NO PORTS")
+            self.COMports.setDisabled(True)
+            self.liveFromSerialAction.setDisabled(True)
+        else:
+            self.COMports.setDisabled(False)
+            self.liveFromSerialAction.setDisabled(False)
+            
         
-        s = self.sensorNumber.text()
-        if s.isdigit():
-            self.selectedSensor = int(s)
+        if self.passLowFreq.value() > self.passHighFreq.value(): self.passLowFreq.setValue(self.passHighFreq.value())
+        self.passLowFrec = self.passLowFreq.value()
+        self.passHighFrec = self.passHighFreq.value()
         
-        s = self.sensorGain.text()
-        try:
-            self.selectedGain = float(s)
-            if (self.selectedSensor in range(1, 10)) and (self.selectedGain in range(1, 12)):
-                self.gain[self.selectedSensor - 1] = self.selectedGain
-        except ValueError:
-            pass
+        if self.bandpassAction.isChecked():
+            self.passLowFreq.setDisabled(False)
+            self.passHighFreq.setDisabled(False)
+        else:
+            self.passLowFreq.setDisabled(True)
+            self.passHighFreq.setDisabled(True)
         
+        if self.bandstopAction.isChecked(): 
+            self.notchActiontypeBox.setDisabled(False)
+        else:
+            self.notchActiontypeBox.setDisabled(True)
+            
+        if self.EnvelopeSignalAction.isChecked():
+            self.envelopeSmoothingСoefficient.setDisabled(False)
+            self.MovingAverage.MA_alpha = self.envelopeSmoothingСoefficient.value()
+        else:
+            self.envelopeSmoothingСoefficient.setDisabled(True)
+        
+        # Read data from File               
+        if (self.PlaybackAction.isChecked() and self.loadFileName != ''):
+            self.readFromFile()
+        
+        # Read data from serial          
+        if (self.liveFromSerialAction.isChecked()):
+            self.readFromSerial()
+                    
+        # Filtering
+        if (self.PlaybackAction.isChecked() and self.loadFileName != '') or (self.liveFromSerialAction.isChecked()):
+            Data = np.zeros((9, self.dataWidth))
+            Time = np.zeros((9, self.dataWidth))
+            for i in range(9):
+                Data[i] = np.concatenate((self.Data[i][self.l: self.dataWidth], self.Data[i][0: self.l]))
+                Time = np.concatenate((self.Time[self.l: self.dataWidth], self.Time[0: self.l]))
+            
+                if self.bandstopAction.isChecked():
+                    if (self.notchActiontypeBox.currentText() == "50 Hz"): 
+                        for j in range(4): Data[i] = self.butter_bandstop_filter(Data[i], 48 + j*50, 52 + j*50, self.fs)
+                    if (self.notchActiontypeBox.currentText() == "60 Hz"):
+                        for j in range(3): Data[i] = self.butter_bandstop_filter(Data[i], 58 + j*60, 62 + j*60, self.fs)
+                                
+                if (self.bandpassAction.isChecked()) :
+                    Data[i] = self.butter_bandpass_filter(Data[i], self.passLowFrec, self.passHighFrec, self.fs)
+            
+                # Shift the boundaries of the graph
+                self.pw[i].setXRange(self.timeWidth*(self.Time[self.l - 1] // self.timeWidth), self.timeWidth*((self.Time[self.l - 1] // self.timeWidth + 1)))
+                
+                # Plot raw and envelope data
+                if  self.rawSignalAction.isChecked(): self.p[i].setData(y=Data[i], x=Time)
+                else: self.p[i].clear()
+                
+                # Plot envelope data
+                if  self.EnvelopeSignalAction.isChecked(): self.pe[i].setData(y=self.DataEnvelope[i], x=Time)
+                else: self.pe[i].clear()
+                    
+                # Plot histogram
+                self.pb[i].setOpts(height=2*self.DataEnvelope[i][-1])
+                
+                self.DataEnvelope[i][0: self.dataWidth - self.ms_len] = self.DataEnvelope[i][self.ms_len:self.dataWidth]
+                for j in range (self.dataWidth - self.ms_len, self.dataWidth):
+                    self.DataEnvelope[i][j] = self.MovingAverage.movingAverage(i, Data[i][j])
+            
+            self.ms_len = 0       
+            
+            # Plot FFT data
+            Y = np.zeros((9, 500))
+            for i in range(9):
+                Y[i] = abs(fft(Data[i][-501: -1]))/500
+                self.FFT[i] = (1-0.85)*Y[i] + 0.85*self.FFT[i]
+            X = self.fs*np.linspace(0, 1, 500)
+            self.pFFT.setData(y=self.FFT[self.button_group.checkedId() - 1][2: int(len(self.FFT[self.button_group.checkedId() - 1])/2)], x=X[2: int(len(X)/2)])
+        else:
+            for i in range(9):
+                self.p[i].clear()
+                self.pe[i].clear()
+                self.pb[i].setOpts(height=0)
+            self.pFFT.clear()
+
+    # Read data from File   
+    def readFromFile(self):
+        
+        coefficient = 1
+        if self.MYOstackVersionCheck.currentText() == "v1.0":
+            coefficient = 3.3/4.094
+        else:
+            coefficient = 3.3/1.024
+        
+        j = 0
+        while j < 100:
+            j += 1
+        
+            msg = self.loadFile.readline() 
+            
+            if msg == '':
+                self.refresh()
+                self.sliderpos = 0
+                self.loadFile.seek(0, 0)
+                for i in range (7):
+                    self.loadFile.readline()
+            else:
+                s = msg.split(' ')
+                
+                if ((self.slider.value() < int((self.sliderpos - self.StartTime)/(self.EndTime - self.StartTime)*100))):
+                    temp = self.slider.value()
+                    self.refresh()
+                    self.slider.setValue(temp)
+                    self.loadFile.seek(0, 0)
+                    for i in range (7):
+                        self.loadFile.readline()
+                    self.sliderpos = self.StartTime
+                    msg = self.loadFile.readline() 
+                    s = msg.split(' ')
+                    
+                if ((self.slider.value() > int((self.sliderpos - self.StartTime)/(self.EndTime - self.StartTime)*100))):
+                    while (msg != '' and self.slider.value() > int((float(s[0]) - self.StartTime)/(self.EndTime - self.StartTime)*100)):
+                        msg = self.loadFile.readline()
+                        s = msg.split(' ')
+                        
+                        if ( self.l == self.dataWidth):
+                            self.l = 0
+                            
+                        for i in range(9):
+                            self.Data[i][self.l] = float(s[i+1])*coefficient/self.gainBox[i].value()
+        
+                        self.Time[self.l] = float(s[0])
+                        
+                        self.l = self.l + 1
+                        self.loopNumber += 1
+                        self.ms_len += 1
+                    temp = self.Time[self.l-1]
+                    self.refresh()
+                    self.Time[0] = temp
+                    self.l = 1
+
+                    
+                self.sliderpos = float(s[0])
+                self.slider.setValue(int((self.sliderpos - self.StartTime)/(self.EndTime - self.StartTime)*100))
+
+                if ( self.l == self.dataWidth):
+                    self.l = 0    
+
+                for i in range(9):
+                    self.Data[i][self.l] = float(s[i+1])*coefficient/self.gainBox[i].value()
+                self.Time[self.l] = float(s[0])
+                
+                self.l = self.l + 1
+                self.loopNumber += 1
+                self.ms_len += 1
+        
+    # Read data from serial                  
+    def readFromSerial(self): 
+        
+        coefficient = 1
+        if self.MYOstackVersionCheck.currentText() == "v1.0":
+            coefficient = 3.3/4.094
+        else:
+            coefficient = 3.3/1.024
+        
+        msg = self.serialMonitor.serialRead()
         # Parsing data from serial buffer
         msg = msg.decode(errors='ignore')
         if len(msg) >= 2:
@@ -341,135 +706,107 @@ class GUI(QtWidgets.QMainWindow):
                         self.l = 0
                     for i in range(9):
                         if s[i].isdigit():
-                            self.Data[i][self.l] = int(s[i])/4.094*3.3/self.gain[i]
+                            self.Data[i][self.l] = int(s[i])
                         else:
                             self.Data[i][self.l] = 0;
                         
                     self.Time[self.l] = self.Time[self.l - 1] + self.dt
-                    self.f.write(str(round(self.Time[self.l], 3)) + " " + str(self.Data[0][self.l]) + " " + str(self.Data[1][self.l]) + " "
-                                 + str(self.Data[2][self.l]) + " " + str(self.Data[3][self.l]) + " "
-                                 + str(self.Data[4][self.l]) + " " + str(self.Data[5][self.l]) + " "
-                                 + str(self.Data[6][self.l]) + " " + str(self.Data[7][self.l]) + " "
-                                 + str(self.Data[8][self.l]) + "\r\n")
+                    if (self.dataRecordingAction.isChecked()):
+                        f = open(self.recordingFileName, 'a')
+                        f.write(str(round(self.Time[self.l], 3)) + " " + str(int(self.Data[0][self.l])) + " " + str(int(self.Data[1][self.l])) + " "
+                                     + str(int(self.Data[2][self.l])) + " " + str(int(self.Data[3][self.l])) + " "
+                                     + str(int(self.Data[4][self.l])) + " " + str(int(self.Data[5][self.l])) + " "
+                                     + str(int(self.Data[6][self.l])) + " " + str(int(self.Data[7][self.l])) + " "
+                                     + str(int(self.Data[8][self.l])) + " \n")
+                        f.close() 
                     
+                    for i in range(9): self.Data[i][self.l] = self.Data[i][self.l]*coefficient/self.gainBox[i].value()
                     self.l = self.l + 1
                     self.loopNumber += 1
                     self.ms_len += 1
-                
-        # Filtering
-        Data = np.zeros((9, self.dataWidth))
-        for i in range(9):
-            Data[i] = np.concatenate((self.Data[i][self.l: self.dataWidth], self.Data[i][0: self.l]))
-         
-        Time = self.Time[self.l: self.dataWidth] + self.Time[0: self.l]
-        
-        self.monitor.delay = self.delay
-        if self.bandstop50.isChecked() == 1:
-            if self.fs > 110: 
-                for i in range(9): Data[i] = self.butter_bandstop_filter(Data[i], 48, 52, self.fs)
-            if self.fs > 210: 
-                for i in range(9): Data[i] = self.butter_bandstop_filter(Data[i], 98, 102, self.fs)
-            if self.fs > 310: 
-                for i in range(9): Data[i] = self.butter_bandstop_filter(Data[i], 148, 152, self.fs)
-            if self.fs > 410: 
-                for i in range(9): Data[i] = self.butter_bandstop_filter(Data[i], 195, 205, self.fs)
-            self.monitor.delay = self.delay + 0.03
-        if self.bandstop60.isChecked() == 1:
-            if self.fs > 130:
-                for i in range(9): Data[i] = self.butter_bandstop_filter(Data[i], 58, 62, self.fs)
-            if self.fs > 230:
-                for i in range(9): Data[i] = self.butter_bandstop_filter(Data[i], 118, 122, self.fs)
-            if self.fs > 330:
-                for i in range(9): Data[i] = self.butter_bandstop_filter(Data[i], 158, 162, self.fs)
-            self.monitor.delay = self.delay + 0.03
-        if ((self.bandpass.isChecked() == 1 or (self.signal.isChecked() == 1 and self.envelope.isChecked() == 1)) and self.passLowFrec < self.passHighFrec 
-            and self.passLowFrec > 0 and self.fs > 2*self.passHighFrec):
-            for i in range(9):
-                Data[i] = self.butter_bandpass_filter(Data[i], self.passLowFrec, self.passHighFrec, self.fs)
-            self.monitor.delay = self.delay + 0.04
-        
-        for i in range(9):
-            self.DataEnvelope[i][0: self.dataWidth - self.ms_len] = self.DataEnvelope[i][self.ms_len:self.dataWidth]
-        for j in range (self.dataWidth - self.ms_len, self.dataWidth):
-            for i in range(9):
-                self.DataEnvelope[i][j] = self.movingAverage(i, Data[i][j], self.MA_alpha)
-        self.ms_len = 0
-               
-        l = 0 # length of filter fluctuation tail
-        # Removing filter fluctuation tail from plot
-        if self.bandpass.isChecked() == 1 or self.bandstop50.isChecked() == 1 or self.bandstop60.isChecked() == 1 or self.envelope.isChecked() == 1:
-            l = int(1/self.dt)
-            if self.loopNumber < self.dataWidth:
-                for i in range(9): 
-                    if self.l >= l: 
-                        Data[i][0: self.dataWidth - self.l + l] = Data[i][self.dataWidth - self.l + l]
-                        self.DataEnvelope[i][0: self.dataWidth - self.l + l]=self.DataEnvelope[i][self.dataWidth - self.l + l]
-                    else:
-                        Data[i] = Data[i][self.dataWidth - self.l]
-                        self.DataEnvelope[i] = self.DataEnvelope[i][self.dataWidth - self.l]
-                l = 0
-        if self.loopNumber < self.dataWidth:
-            l = self.dataWidth - self.l
-        
-        # Shift the boundaries of the graph
-        timeCount = self.Time[self.l - 1] // self.timeWidth
-        for i in range(9):
-            self.pw[i].setXRange(self.timeWidth*timeCount, self.timeWidth*(timeCount + 1))            
-        
-        # Plot raw and envelope data
-        if  self.signal.isChecked() == 1 and self.envelope.isChecked() == 1:
-            for i in range(9):
-                self.p[i].setData(y=Data[i][l: self.dataWidth], x=Time[l: self.dataWidth])
-                self.pe[i].setData(y=self.DataEnvelope[i][l: self.dataWidth], x=Time[l: self.dataWidth])
-            self.monitor.delay += 0.02
-        
-        # Plot envelope data            
-        if self.signal.isChecked() == 0 and self.envelope.isChecked() == 1:
-            for i in range(9):
-                self.pe[i].setData(y=self.DataEnvelope[i][l: self.dataWidth], x=Time[l: self.dataWidth])
-                self.p[i].clear()
-                
-        # Plot raw data 
-        if self.signal.isChecked() == 1 and self.envelope.isChecked() == 0:
-            for i in range(9):
-                self.p[i].setData(y=Data[i][l: self.dataWidth], x=Time[l: self.dataWidth])
-                self.pe[i].clear()
-                        
-        # Plot histogram
-        for i in range(9):
-            self.pb[i].setOpts(height=2*self.DataEnvelope[i][-1])
-        
-        # Plot FFT data
-        Y = abs(fft(Data[self.button_group.checkedId() - 1][-501: -1]))/500
-        X = 1/self.dt*np.linspace(0, 1, 500)
-        self.FFT = (1-0.85)*Y + 0.85*self.FFT
-        self.pFFT.setData(y=self.FFT[2: int(len(self.FFT)/2)], x=X[2: int(len(X)/2)]) 
-                    
-    # Values for butterworth bandpass filter
-    def butter_bandpass(self, lowcut, highcut, fs, order=4):
+                                     
+    
+    # Butterworth bandpass filter
+    def butter_bandpass_filter(self, data, lowcut, highcut, fs, order=4):
         nyq = 0.5*fs
         low = lowcut/nyq
         high = highcut/nyq
         b, a = butter(order, [low, high], btype='bandpass')
-        return b, a
-    # Butterworth bandpass filter
-    def butter_bandpass_filter(self, data, lowcut, highcut, fs, order=4):
-        b, a = self.butter_bandpass(lowcut, highcut, fs, order=order)
         y = lfilter(b, a, data)
         return y
-    # Values for butterworth bandstop filter
-    def butter_bandstop(self, lowcut, highcut, fs, order=2):
+    
+    # Butterworth bandstop filter
+    def butter_bandstop_filter(self, data, lowcut, highcut, fs, order=4):
         nyq = 0.5*fs
         low = lowcut/nyq
         high = highcut/nyq
         b, a = butter(order, [low, high], btype='bandstop')
-        return b, a
-    # Butterworth bandstop filter
-    def butter_bandstop_filter(self, data, lowcut, highcut, fs, order=4):
-        b, a = self.butter_bandstop(lowcut, highcut, fs, order=order)
         y = lfilter(b, a, data)
         return y
-    def movingAverage(self, i, data, alpha):
+   
+    # Exit event
+    def closeEvent(self, event):
+        self.mainrun.running = False
+        self.serialMonitor.serialDisconnection()
+        event.accept()
+
+# Serial monitor class
+class SerialMonitor:
+    # Custom constructor
+    def __init__(self, delay):
+        self.running = False
+        self.connect = False
+        self.baudRate = 1000000
+        self.playFile = 0
+        self.delay = delay      
+        self.ports = [p[0] for p in serial.tools.list_ports.comports(include_links=False) ]
+        self.COM = ''
+        self.ser = serial.Serial()
+        if len(self.ports) > 0:
+            self.COM = self.ports[0]
+        
+    def updatePorts(self):
+        self.ports = [p[0] for p in serial.tools.list_ports.comports(include_links=False) ]
+    
+    def serialConnect(self):
+        self.updatePorts()
+        if not self.connect:
+            if self.COM != '':
+                try:
+                    self.ser = serial.Serial(self.COM, self.baudRate)
+                    self.connect = True  
+                except SerialException :
+                    self.connect = False
+                    
+    def serialDisconnection(self):
+        self.ser.close()
+        self.connect = False
+        
+    def serialRead(self):  
+        msg = bytes(0)
+        try:
+            msg = self.ser.read( self.ser.inWaiting() )
+        except SerialException :
+            try:
+               self.ser.close()
+               self.ser.open()
+               msg = bytes(0)
+            except SerialException :
+                pass
+            pass
+        return msg
+
+# Moving average class
+class MovingAverage:
+    # Custom constructor
+    def __init__(self, fs):
+        self.MA = np.zeros((9, 3)) 
+        self.MA_alpha = 0.95
+        self.Y0 = np.zeros(9)
+        self.X0 = np.zeros(9)
+        self.fs = fs
+    
+    def movingAverage(self, i, data):
         wa = 2.0*self.fs*np.tan(3.1416*1/self.fs)
         HPF = (2*self.fs*(data-self.X0[i]) - (wa-2*self.fs)*self.Y0[i])/(2*self.fs+wa)
         self.Y0[i] = HPF
@@ -477,63 +814,27 @@ class GUI(QtWidgets.QMainWindow):
         data = HPF
         if data < 0:
             data = -data
-        self.MA[i][0] = (1 - alpha)*data + alpha*self.MA[i][0];
-        self.MA[i][1] = (1 - alpha)*(self.MA[i][0]) + alpha*self.MA[i][1];
-        self.MA[i][2] = (1 - alpha)*(self.MA[i][1]) + alpha*self.MA[i][2];
+        self.MA[i][0] = (1 - self.MA_alpha)*data + self.MA_alpha*self.MA[i][0];
+        self.MA[i][1] = (1 - self.MA_alpha)*(self.MA[i][0]) + self.MA_alpha*self.MA[i][1];
+        self.MA[i][2] = (1 - self.MA_alpha)*(self.MA[i][1]) + self.MA_alpha*self.MA[i][2];
         return self.MA[i][2]*2
-    # Change gain
-    def _on_radio_button_clicked(self, button):
-        if self.monitor.COM != '':
-            self.monitor.ser.write(bytearray([button.Value]))
-    # Exit event
-    def closeEvent(self, event):
-        self.f.close()
-        self.monitor.ser.close()
-        event.accept()
 
 # Serial monitor class
-class SerialMonitor(QtCore.QThread):
-    bufferUpdated = QtCore.pyqtSignal(bytes)
+class MainRun(QtCore.QThread):
+    bufferUpdated = QtCore.pyqtSignal()
     # Custom constructor
-    def __init__(self, COM, baudRate, delay):
+    def __init__(self, delay):
         QtCore.QThread.__init__(self)
         self.running = False
-        self.filter = False
-        self.COM = COM
-        self.baudRate = baudRate
-        self.baudRate = baudRate
-        self.checkPort = 1
-        self.delay = delay
+        self.playFile = 0
+        self.delay = delay      
 
     # Listening port
     def run(self):
         while self.running is True:
-            while self.COM == '': 
-                ports = serial.tools.list_ports.comports(include_links=False)
-                for port in ports :
-                    self.COM = port.device
-                if self.COM != '':
-                    time.sleep(0.5)
-                    self.ser = serial.Serial(self.COM, self.baudRate)
-                    self.checkPort = 0
-            while self.checkPort:
-                ports = serial.tools.list_ports.comports(include_links=False)
-                for port in ports :
-                    if self.COM == port.device:
-                        time.sleep(0.5)
-                        self.ser = serial.Serial(self.COM, self.baudRate)
-                        self.checkPort = 0
-                   
-            # Waiting for data
-            while (self.ser.inWaiting() == 0):
-                pass
-            # Reading data
-            msg = self.ser.read( self.ser.inWaiting() )
-            if msg:
-                #Parsing data
-                self.bufferUpdated.emit(msg)
-                time.sleep(self.delay)
-                
+            self.bufferUpdated.emit()
+            time.sleep(self.delay) 
+         
 # Starting program       
 if __name__ == '__main__':
     app = QtCore.QCoreApplication.instance()
