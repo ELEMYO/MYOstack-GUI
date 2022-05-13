@@ -97,36 +97,36 @@ class GUI(QtWidgets.QMainWindow):
         self.msg_end = bytearray([0])
         
         # Menu panel
-        self.COMports = QtGui.QComboBox()        
+        self.COMports = QtWidgets.QComboBox()        
         self.COMports.setDisabled(False)
         self.COMports.setSizeAdjustPolicy(0)
         
-        self.liveFromSerialAction = QtGui.QAction(QtGui.QIcon('img/play.png'), 'Start\Stop live from serial ', self)
+        self.liveFromSerialAction = QtWidgets.QAction(QtGui.QIcon('img/play.png'), 'Start\Stop live from serial ', self)
         self.liveFromSerialAction.setCheckable(True)
         self.liveFromSerialAction.setChecked(False)
         self.liveFromSerialAction.triggered.connect(self.liveFromSerial)
 
-        self.dataRecordingAction = QtGui.QAction(QtGui.QIcon('img/rec.png'), 'Start/Stop recording', self)
+        self.dataRecordingAction = QtWidgets.QAction(QtGui.QIcon('img/rec.png'), 'Start/Stop recording', self)
         self.dataRecordingAction.triggered.connect(self.dataRecording)
         self.dataRecordingAction.setCheckable(True)
         self.dataRecordingAction.setDisabled(True)
         
-        self.refreshAction = QtGui.QAction(QtGui.QIcon('img/refresh.png'), 'Refresh screen (R)', self)
+        self.refreshAction = QtWidgets.QAction(QtGui.QIcon('img/refresh.png'), 'Refresh screen (R)', self)
         self.refreshAction.setShortcut('r')
         self.refreshAction.triggered.connect(self.refreshForAction)
         self.refreshAction.setDisabled(True)   
         
-        self.pauseAction = QtGui.QAction(QtGui.QIcon('img/pause.png'), 'Pause (Space)', self)
+        self.pauseAction = QtWidgets.QAction(QtGui.QIcon('img/pause.png'), 'Pause (Space)', self)
         self.pauseAction.setCheckable(True)
         self.pauseAction.setChecked(False)
         self.pauseAction.triggered.connect(self.pause)
         self.pauseAction.setShortcut('Space')
         self.pauseAction.setDisabled(True)   
                
-        dataLoadAction = QtGui.QAction(QtGui.QIcon('img/load.png'), 'Select playback file', self)
+        dataLoadAction = QtWidgets.QAction(QtGui.QIcon('img/load.png'), 'Select playback file', self)
         dataLoadAction.triggered.connect(self.dataLoad)
         
-        self.PlaybackAction = QtGui.QAction(QtGui.QIcon('img/playback.png'), 'Start/Stop playback from file: \nFILE NOT SELECTED', self)
+        self.PlaybackAction = QtWidgets.QAction(QtGui.QIcon('img/playback.png'), 'Start/Stop playback from file: \nFILE NOT SELECTED', self)
         self.PlaybackAction.triggered.connect(self.Playback)
         self.PlaybackAction.setCheckable(True)
         self.PlaybackAction.setDisabled(True)
@@ -136,44 +136,44 @@ class GUI(QtWidgets.QMainWindow):
         self.slider.setFixedWidth(40)
         self.slider.setDisabled(True)  
         
-        self.MYOstackVersion = QtGui.QLabel('MYOstack version:  ', self)
-        self.MYOstackVersionCheck = QtGui.QComboBox() 
+        self.MYOstackVersion = QtWidgets.QLabel('MYOstack version:  ', self)
+        self.MYOstackVersionCheck = QtWidgets.QComboBox() 
         self.MYOstackVersionCheck.addItem("v1.1")
         self.MYOstackVersionCheck.addItem("v1.0")
-        self.MYOstackVersion1 = QtGui.QLabel('       ', self)
+        self.MYOstackVersion1 = QtWidgets.QLabel('       ', self)
         
-        self.rawSignalAction = QtGui.QCheckBox('MAIN SIGNAL', self)
+        self.rawSignalAction = QtWidgets.QCheckBox('MAIN SIGNAL', self)
         self.rawSignalAction.setChecked(True)
-        self.rawSignalAction1 = QtGui.QLabel('       ', self)  
+        self.rawSignalAction1 = QtWidgets.QLabel('       ', self)  
 
-        self.EnvelopeSignalAction = QtGui.QCheckBox('ENVELOPE:', self)
+        self.EnvelopeSignalAction = QtWidgets.QCheckBox('ENVELOPE:', self)
         self.EnvelopeSignalAction.setChecked(True)
-        self.EnvelopeSignalAction1 = QtGui.QLabel('    ', self)
-        self.envelopeSmoothingСoefficient = QtGui.QDoubleSpinBox()
+        self.EnvelopeSignalAction1 = QtWidgets.QLabel('    ', self)
+        self.envelopeSmoothingСoefficient = QtWidgets.QDoubleSpinBox()
         self.envelopeSmoothingСoefficient.setSingleStep(0.01)
         self.envelopeSmoothingСoefficient.setRange(0, 1)
         self.envelopeSmoothingСoefficient.setValue(0.95)
         
-        self.bandstopAction = QtGui.QCheckBox('BANDSTOP FILTER:', self)
+        self.bandstopAction = QtWidgets.QCheckBox('BANDSTOP FILTER:', self)
         self.bandstopAction.setCheckable(True)
         
-        self.notchActiontypeBox=QtGui.QComboBox()
+        self.notchActiontypeBox=QtWidgets.QComboBox()
         self.notchActiontypeBox.addItem("50 Hz")
         self.notchActiontypeBox.addItem("60 Hz")
         self.notchActiontypeBox.setDisabled(True)
                         
-        self.bandpassAction = QtGui.QCheckBox('BANDPASS FILTER:', self)
+        self.bandpassAction = QtWidgets.QCheckBox('BANDPASS FILTER:', self)
         self.bandpassAction.setCheckable(True)
         self.bandpassAction.setChecked(True)
-        self.bandpassAction1 = QtGui.QLabel('  -  ', self)
-        self.bandpassAction2 = QtGui.QLabel('       ', self)
+        self.bandpassAction1 = QtWidgets.QLabel('  -  ', self)
+        self.bandpassAction2 = QtWidgets.QLabel('       ', self)
         
-        self.passLowFreq = QtGui.QSpinBox()
+        self.passLowFreq = QtWidgets.QSpinBox()
         self.passLowFreq.setRange(10, 249)
         self.passLowFreq.setValue(10)
         self.passLowFreq.setDisabled(True)
                       
-        self.passHighFreq = QtGui.QSpinBox()
+        self.passHighFreq = QtWidgets.QSpinBox()
         self.passHighFreq.setRange(10, 249)
         self.passHighFreq.setValue(200)
         self.passHighFreq.setDisabled(True)     
@@ -280,7 +280,7 @@ class GUI(QtWidgets.QMainWindow):
         self.gainBox  = []
         for i in range(9):
             self.gainLabel.append(QtWidgets.QLabel("GAIN: 1000 x"))
-            self.gainBox.append(QtGui.QSpinBox())
+            self.gainBox.append(QtWidgets.QSpinBox())
             self.gainBox[i].setRange(1, 10)
             self.gainBox[i].setValue(1)
         
