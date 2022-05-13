@@ -101,7 +101,7 @@ class GUI(QtWidgets.QMainWindow):
         self.COMports.setDisabled(False)
         self.COMports.setSizeAdjustPolicy(0)
         
-        self.liveFromSerialAction = QtWidgets.QAction(QtGui.QIcon('img/play.png'), 'Start\Stop live from serial ', self)
+        self.liveFromSerialAction = QtWidgets.QAction(QtGui.QIcon('img/play.png'), 'Start/Stop live from serial ', self)
         self.liveFromSerialAction.setCheckable(True)
         self.liveFromSerialAction.setChecked(False)
         self.liveFromSerialAction.triggered.connect(self.liveFromSerial)
@@ -429,7 +429,8 @@ class GUI(QtWidgets.QMainWindow):
             f.write("File format: \r\ntime in s | 9 sensor data points \r\n") # Data file format
             f.close()
         else:
-            self.refreshAction.setDisabled(False)   
+            if not self.PlaybackAction.isChecked():
+                self.refreshAction.setDisabled(False)
             self.pauseAction.setDisabled(False)
             self.textWindow.insertPlainText(datetime.now().strftime("[%H:%M:%S] ") + "recording stopped. Result file: \"" + os.getcwd() + self.recordingFileName + "\"\n")
             self.textWindow.verticalScrollBar().setValue(self.textWindow.verticalScrollBar().maximum()-2)
@@ -437,7 +438,8 @@ class GUI(QtWidgets.QMainWindow):
     # Selecting playback file
     def dataLoad(self):
         self.dataRecordingAction.setChecked(False)
-        self.refreshAction.setDisabled(False)   
+        if not self.PlaybackAction.isChecked():
+            self.refreshAction.setDisabled(False)    
         self.pauseAction.setDisabled(False)
         self.recordingFileName = ''
         path = QtWidgets.QFileDialog.getOpenFileName(self, 'Open a file', '',
