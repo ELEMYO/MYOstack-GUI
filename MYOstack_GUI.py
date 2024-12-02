@@ -75,13 +75,14 @@ class GUI(QtWidgets.QMainWindow):
         self.passHighFrec = 500 # High frequency for band-pass filter
         
         self.timeWidth = 10 # Plot window length in seconds
-        self.dataWidth = int((self.timeWidth+0.5)*self.fs) # Maximum count of plotting data points (10.5 seconds window)
+        self.dataWidth = int((self.timeWidth + 1)*self.fs) # Maximum count of plotting data points (10.5 seconds window)
         self.Data = np.zeros((9, self.dataWidth)) # Raw data array, first index - sensor number, second index - sensor data
         self.DataEnvelope = np.zeros((9, self.dataWidth)) # Envelope of row data, first index - sensor number, second index - sensor data
         self.l = 0 # Current sensor data point
         self.Time = [0]*self.dataWidth # Time array (in seconds)
+        self.xRangeStart = 0
         
-        self.MovingAverage = MovingAverage(self.fs) # Variable for data envelope (for moving average method)
+        self.MovingAverage = MovingAverage() # Variable for data envelope (for moving average method)
         
         self.recordingFileName_BIN = '' # Recording file name
         self.recordingFileName_TXT = '' # Recording file name
@@ -424,11 +425,12 @@ class GUI(QtWidgets.QMainWindow):
         self.Time = [0]*self.dataWidth
         self.Data = np.zeros((9, self.dataWidth))
         self.DataEnvelope = np.zeros((9, self.dataWidth))
-        self.MovingAverage = MovingAverage(self.fs)
+        self.MovingAverage = MovingAverage()
         self.FFT = np.zeros((9, 2000)) 
         self.msg_end = bytearray([0])     
         self.ms_len =  0
         self.slider.setValue(0)
+        self.xRangeStart = 0
 
     # Refresh screen
     def refreshForAction(self):
@@ -538,7 +540,8 @@ class GUI(QtWidgets.QMainWindow):
             self.COMports.setDisabled(True)
             self.liveFromSerialAction.setDisabled(True)
         else:
-            self.COMports.setDisabled(False)
+            if self.liveFromSerialAction.isChecked(): self.COMports.setDisabled(True)
+            else: self.COMports.setDisabled(False)
             self.liveFromSerialAction.setDisabled(False)
             
         
@@ -589,16 +592,20 @@ class GUI(QtWidgets.QMainWindow):
             
                 if self.bandstopAction.isChecked():
                     if (self.notchActiontypeBox.currentText() == "50 Hz"): 
-                        for j in range(4): 
+                        for j in range(9): 
                             Data[i] = self.butter_bandstop_filter(Data[i], 45 + j*50, 55 + j*50, self.fs)
                     if (self.notchActiontypeBox.currentText() == "60 Hz"):
-                        for j in range(4): Data[i] = self.butter_bandstop_filter(Data[i], 55 + j*60, 65 + j*60, self.fs)
+                        for j in range(8): Data[i] = self.butter_bandstop_filter(Data[i], 55 + j*60, 65 + j*60, self.fs)
+                    if not (self.bandpassAction.isChecked()) :
+                        for j in range(int(int(0.5/self.dt))): Data[i][j] = 0
                                 
                 if (self.bandpassAction.isChecked()) :
                     Data[i] = self.butter_bandpass_filter(Data[i], self.passLowFrec, self.passHighFrec, self.fs)
+                    for j in range(int(int(0.5/self.dt))): Data[i][j] = 0
             
                 # Shift the boundaries of the graph
-                self.pw[i].setXRange(self.timeWidth*(self.Time[self.l - 1] // self.timeWidth), self.timeWidth*((self.Time[self.l - 1] // self.timeWidth + 1)))
+                self.pw[i].setXRange(self.xRangeStart + self.timeWidth*((self.Time[self.l - 1] - self.xRangeStart)// self.timeWidth), 
+                                     self.xRangeStart + self.timeWidth*((self.Time[self.l - 1] - self.xRangeStart) // self.timeWidth + 1))
                 
                 # Plot raw data
                 if  self.rawSignalAction.isChecked(): self.p[i].setData(y=Data[i], x=Time)
@@ -624,9 +631,9 @@ class GUI(QtWidgets.QMainWindow):
             
             # Plot FFT data
             Y = np.zeros((9, 2000))
-            for i in range(int(self.sensorsNumber.value())):
-                Y[i] = abs(fft(Data[i][-2001: -1]))/2000
-                self.FFT[i] = (1-0.5)*Y[i] + 0.5*self.FFT[i]
+            i = int(self.sensorSelectedActionBox.currentIndex())
+            Y[i] = abs(fft(Data[i][-2001: -1]))/2000
+            self.FFT[i] = (1-0.5)*Y[i] + 0.5*self.FFT[i]
             X = self.fs*np.linspace(0, 1, 2000)
             sensor = self.sensorSelectedActionBox.currentIndex()
             self.pFFT.setData(y=self.FFT[sensor][2: int(len(self.FFT[sensor])/2)], x=X[2: int(len(X)/2)])
@@ -639,12 +646,16 @@ class GUI(QtWidgets.QMainWindow):
 
     # Read data from File   
     def readFromFile(self):
-        if self.MYOstackVersionCheck.currentText() == "v1.0" or (self.MYOstackVersionCheck.currentText() == "v2.0"):
+        coefficient = 1
+        if (self.MYOstackVersionCheck.currentText() == "v2.0"):
             coefficient = 3.25/4.094
             ref = 2048
-        else:
+        if (self.MYOstackVersionCheck.currentText() == "v1.1"):
             coefficient = 3.25/1.024
-            ref = 1024
+            ref = 0
+        if (self.MYOstackVersionCheck.currentText() == "v1.0"):
+            coefficient = 3.25/4.094
+            ref = 0
         
         j = 0
         while j < 100:
@@ -657,9 +668,20 @@ class GUI(QtWidgets.QMainWindow):
                 self.refresh()
                 self.sliderpos = 0
                 self.slider.setValue(0)
+                self.xRangeStart = 0
                     
             unpeck_b = struct.unpack("H H H H H H H H H", self.loadData[self.sliderpos*9*2:(self.sliderpos+1)*9*2])
             for i in range(9): self.Data[i][self.l] = (unpeck_b[i] - ref)*coefficient/self.gainBox[i].value()
+            
+            if (self.dataRecordingAction.isChecked()):
+                bin_data = struct.pack("H H H H H H H H H", unpeck_b[0], unpeck_b[1], unpeck_b[2],
+                                        unpeck_b[3], unpeck_b[4], unpeck_b[5], unpeck_b[6], unpeck_b[7], unpeck_b[8])
+                
+                self.recordingFile_BIN.write(bin_data)
+                
+                sensors_data = str(round(self.Time[self.l-1], 3))
+                for i in range(9): sensors_data += (" " + str(round(self.Data[i][self.l], 3)))
+                self.recordingFile_TXT.write(sensors_data + " \n")
             
             if ((self.slider.value() != int(self.sliderpos/self.loadDataLen*100))):
                 self.sliderpos += int(self.slider.value()*self.loadDataLen/100 - self.sliderpos)
@@ -667,6 +689,7 @@ class GUI(QtWidgets.QMainWindow):
                 self.refresh()
                 self.l = temp
                 self.Time[self.l] = self.sliderpos*self.dt
+                self.xRangeStart = self.Time[self.l]
             
             self.Time[self.l] = self.sliderpos*self.dt
             self.l = self.l + 1
@@ -680,12 +703,15 @@ class GUI(QtWidgets.QMainWindow):
     def readFromSerial(self): 
         
         coefficient = 1
-        if self.MYOstackVersionCheck.currentText() == "v1.0" or (self.MYOstackVersionCheck.currentText() == "v2.0"):
+        if (self.MYOstackVersionCheck.currentText() == "v2.0"):
             coefficient = 3.25/4.094
             ref = 2048
-        else:
+        if (self.MYOstackVersionCheck.currentText() == "v1.1"):
             coefficient = 3.25/1.024
-            ref = 1024
+            ref = 0
+        if (self.MYOstackVersionCheck.currentText() == "v1.0"):
+            coefficient = 3.25/4.094
+            ref = 0
         
         msg = self.serialMonitor.serialRead()
         # Parsing data from serial buffer
@@ -714,7 +740,6 @@ class GUI(QtWidgets.QMainWindow):
                     if (self.dataRecordingAction.isChecked()):
                         bin_data = struct.pack("H H H H H H H H H", data[0], data[1], data[2],
                                                 data[3], data[4], data[5], data[6], data[7], data[8])
-                        
                         
                         self.recordingFile_BIN.write(bin_data)
                         
@@ -815,19 +840,11 @@ class SerialMonitor:
 # Moving average class
 class MovingAverage:
     # Custom constructor
-    def __init__(self, fs):
+    def __init__(self):
         self.MA = np.zeros((9, 3)) 
         self.MA_alpha = 0.95
-        self.Y0 = np.zeros(9)
-        self.X0 = np.zeros(9)
-        self.fs = fs
     
     def movingAverage(self, i, data):
-        wa = 2.0*self.fs*np.tan(3.1416*1/self.fs)
-        HPF = (2*self.fs*(data-self.X0[i]) - (wa-2*self.fs)*self.Y0[i])/(2*self.fs+wa)
-        self.Y0[i] = HPF
-        self.X0[i] = data
-        data = HPF
         if data < 0:
             data = -data
         self.MA[i][0] = (1 - self.MA_alpha)*data + self.MA_alpha*self.MA[i][0];
@@ -860,4 +877,3 @@ if __name__ == '__main__':
     window.show()
     window.start()
     sys.exit(app.exec_())
-
