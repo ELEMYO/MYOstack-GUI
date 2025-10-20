@@ -10,10 +10,10 @@ Supported operating systems: **Windows**, **Linux**, **macOS**.
 
 ## 2 Functional
 - in-depth EMG signal analysis.
-- real-time display of **raw**, **smoothed**, and **integrated** signals from up to eight MYOblue sensors.
+- real-time display of **raw**, **smoothed**, and **integrated** signals from up to nine MYOstack sensors.
 - real-time **FFT** analysys of EMG signals.
 - band-pass and 50/60 Hz notch filters.
-- **record and playback** up to eight **synchronized** channels.
+- **record and playback** up to nine **synchronized** channels.
 - Supports EMG signals recording in **ASCII** (.txt) format for compatibility with external analysis software.
 
 ## 3 Support
