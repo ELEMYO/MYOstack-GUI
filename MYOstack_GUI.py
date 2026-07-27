@@ -824,15 +824,18 @@ class SerialMonitor:
         self.connect = False
         
     def serialRead(self):  
+        if not self.ser or not self.ser.is_open:
+            return bytes(0)
+
         msg = bytes(0)
         try:
-            msg = self.ser.read( self.ser.inWaiting() )
-        except SerialException :
+            if self.ser.in_waiting > 0:
+                msg = self.ser.read(self.ser.in_waiting)
+        except (SerialException, OSError, AttributeError):
             try:
                self.ser.close()
                self.ser.open()
-               msg = bytes(0)
-            except SerialException :
+            except (SerialException, OSError):
                 pass
             pass
         return msg
